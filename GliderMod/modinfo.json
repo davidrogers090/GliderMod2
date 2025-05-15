@@ -1,0 +1,13 @@
+{
+    "type": "code",
+    "modid": "glidierglider",
+    "name": "Glidier Glider",
+    "authors": [
+        "Knifey"
+    ],
+    "description": "Changes the glider to better feel like soaring.  It does so by slowing the glider's acceleration and allowing the glider to better climb upwards.",
+    "version": "0.0.2",
+    "dependencies": {
+        "game": "1.20.7"
+    }
+}
