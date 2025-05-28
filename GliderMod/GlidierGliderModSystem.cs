@@ -2,18 +2,12 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
-using Vintagestory.API.Config;
-using Vintagestory.API.Server;
-using Vintagestory.API.Util;
-using Vintagestory.GameContent;
 using Vintagestory.API.MathTools;
 
 namespace GliderMod
 {
-
 
     public class GlidierGliderModSystem : ModSystem
     {
@@ -23,10 +17,10 @@ namespace GliderMod
         public const float speedFactor = 0.25f;
         public const float speedMax = 1.5f;
 
-        public const float fallSpeed = 0.05f;
+        public const float fallSpeed = 0.5f;
 
-        
-
+        public const float verticalLerpFactor = 25f;
+        public const float horizontalLerpFactor = 40f;
 
         protected Harmony harmony;
 
@@ -60,69 +54,76 @@ namespace GliderMod
     [HarmonyPatch(typeof(PModulePlayerInAir), "ApplyFlying")]
     public class GG_PMPIA_ApplyFlying
     {
-        // Associates persistent data with each PModulePlayerInAir instance
-        static readonly ConditionalWeakTable<PModulePlayerInAir, Vec3f> lastLook =
-            new();
+        static double NormalizeAngle(double angle)
+        {
+            angle = angle % (2 * Math.PI);
+            if (angle < 0) angle += 2 * Math.PI;
+            return angle;
+        }
+
+        static double LerpAngle(double a, double b, double t)
+        {
+            a = NormalizeAngle(a);
+            b = NormalizeAngle(b);
+            double diff = b - a;
+            if (diff > Math.PI)
+            {
+                if (a > b)
+                {
+                    a += 2 * Math.PI;
+                }
+                else
+                {
+                    b += 2 * Math.PI;
+                }
+                diff = b - a;
+            }
+            
+            return a + diff * t;
+        }
+
+        static double NormalizePitch(double pitch)
+        {
+            if (pitch > Math.PI / 2) pitch = Math.PI - pitch;
+            return pitch;
+        }
+
+        static double LerpPitch(double a, double b, double t)
+        {
+            a = NormalizePitch(a);
+            b = NormalizePitch(b);
+            double diff = b - a;
+            return NormalizePitch(a + diff * t);
+        }
 
         static bool Prefix(PModulePlayerInAir __instance, float dt, Entity entity, EntityPos pos, EntityControls controls)
         {
             if (controls.Gliding)
             {
-
-                Vec3d lastFlightPath = pos.Motion.Clone();
-                lastFlightPath.Y += GlidierGliderModSystem.fallSpeed;
-                Vec3f lastPath = lastFlightPath.ToVec3f().NormalizedCopy();
-
-                Vec3f lastPosLook = lastLook.GetOrCreateValue(__instance).NormalizedCopy();
-                lastLook.GetOrCreateValue(__instance).Set(pos.GetViewVector());
-
-                bool locked = true;
-                if (lastPath.DistanceTo(lastPosLook) > 0.01f)
-                {
-                    locked = false;
-                }
-
-                
+                Vec3f viewVector = pos.GetViewVector().Normalize();
 
                 if (controls.GlideSpeed == 0)
                 {
                     controls.GlideSpeed = pos.Motion.Length();
                 }
-                double cosPitch = Math.Cos(pos.Pitch);
-                double sinPitch = Math.Sin(pos.Pitch);
-
-                double cosYaw = Math.Cos(pos.Yaw);
-                double sinYaw = Math.Sin(pos.Yaw);
-
-                double glideFactor = sinPitch;
+                double glideFactor = viewVector.Y;
 
                 controls.GlideSpeed = GameMath.Clamp(controls.GlideSpeed - (glideFactor * dt * GlidierGliderModSystem.speedFactor), GlidierGliderModSystem.speedMin, GlidierGliderModSystem.speedMax);
 
+                double yaw = Math.Atan2(pos.Motion.X, pos.Motion.Z);
 
-                var pitch = sinPitch * controls.GlideSpeed;
+                double motionLength = pos.Motion.Length();
+                double pitch = motionLength == 0 ? 0d : Math.Asin(pos.Motion.Y / motionLength);
 
-                Vec3d perfect = new Vec3d(-cosPitch * sinYaw, sinPitch, -cosPitch * cosYaw);
-                perfect.Normalize();
+                double lerpYaw = LerpAngle(yaw, pos.Yaw, GlidierGliderModSystem.horizontalLerpFactor * dt);
+                double lerpPitch = LerpPitch(pitch, Math.PI - pos.Pitch, GlidierGliderModSystem.verticalLerpFactor * dt);
 
-                if (locked) { 
-                    pos.Motion = perfect.Mul(controls.GlideSpeed);
-                }
-                else
-                {
-                    Vec3f perff = perfect.ToVec3f();
-                    
-                    double x = GameMath.Lerp(lastPath.X, perff.X, 0.1f);
-                    double y = GameMath.Lerp(lastPath.Y, perff.Y, 0.1f);
-                    double z = GameMath.Lerp(lastPath.Z, perff.Z, 0.1f);
-                    Vec3d smoothed = new Vec3d(x, y, z);
-                    smoothed.Normalize();
+                double cosPitch = Math.Cos(lerpPitch);
 
-                    pos.Motion = smoothed.Mul(controls.GlideSpeed);
-                }
-                    pos.Motion.Y -= GlidierGliderModSystem.fallSpeed;
+                Vec3d smoothed = new Vec3d(cosPitch * Math.Sin(lerpYaw), Math.Sin(lerpPitch), cosPitch * Math.Cos(lerpYaw)).Normalize();
 
-
-
+                pos.Motion = smoothed.Mul(controls.GlideSpeed);
+                pos.Motion.Y -= GlidierGliderModSystem.fallSpeed * dt;
             }
             else
             {
